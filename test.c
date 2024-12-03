@@ -4,13 +4,6 @@
 #define JSON_P_IMPL
 #include "JsonP.h"
 
-JsonP_Value try_parse_bool(const char* str, uint64_t* i);
-JsonP_Value try_parse_null(const char* str, uint64_t* i);
-JsonP_Value try_parse_string(const char* str, uint64_t* i);
-JsonP_Value try_parse_number(const char* str, uint64_t* i);
-JsonP_Value try_parse_array(const char* str, uint64_t* i);
-JsonP_Value try_parse_object(const char* str, uint64_t* i);
-
 void print_array(JsonP_Value arr, uint64_t level);
 void print_object(JsonP_Value arr, uint64_t level);
 
