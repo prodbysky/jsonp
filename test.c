@@ -44,7 +44,8 @@ typedef enum {
     JPPE_STRING_INVALID_BEGIN    = 7,
     JPPE_STRING_NOT_ENOUGH_CHARS = 8,
     JPPE_NUMBER_INVALID_BEGIN    = 9,
-    JPPE_ARRAY_INVALID_BEGIN     = 10
+    JPPE_ARRAY_INVALID_BEGIN     = 10,
+    JPPE_OBJECT_INVALID_BEGIN    = 11
 } JsonP_ParseError;
 
 typedef union JsonP_Value {
@@ -100,21 +101,55 @@ void JsonP_Array_push(JsonP_Array* arr, JsonP_Value val) {
     }
     arr->xs[arr->len++] = val;
 }
+JsonP_ObjectValues JsonP_ObjectValues_new() {
+    JsonP_ObjectValues o_vals = {0};
+    o_vals.cap                = 8;
+    o_vals.len                = 0;
+    o_vals.values             = malloc(sizeof(JsonP_ObjectEntry) * 8);
+    memset(o_vals.values, 0, sizeof(JsonP_ObjectEntry) * 8);
+    return o_vals;
+}
+void JsonP_ObjectValues_push(JsonP_ObjectValues* vals, const char* name,
+                             JsonP_Value value) {
+    if (vals->len >= vals->cap) {
+        vals->cap    *= 1.5;
+        vals->values  = realloc(vals->values, sizeof(JsonP_Value) * vals->cap);
+    }
+    vals->values[vals->len].key = malloc(sizeof(char) * (strlen(name) + 1));
+    memcpy(vals->values[vals->len].key, name, strlen(name));
+    vals->values[vals->len].key[strlen(name)] = 0;
+    vals->values[vals->len].value             = malloc(sizeof(JsonP_Value));
+    memcpy(vals->values[vals->len].value, &value, sizeof(JsonP_Value));
+    vals->len++;
+}
+JsonP_Value JsonP_ObjectValues_get(const JsonP_ObjectValues* vals,
+                                   const char* name) {
+    for (int i = 0; i < vals->len; i++) {
+        if (strcmp(vals->values[i].key, name) == 0) {
+            return *vals->values[i].value;
+        }
+    }
+    return (JsonP_Value) {.type = JPT_NULL, .error = JPPE_NONE};
+}
 
 JsonP_Value try_parse_bool(const char* str, uint64_t* i);
 JsonP_Value try_parse_null(const char* str, uint64_t* i);
 JsonP_Value try_parse_string(const char* str, uint64_t* i);
 JsonP_Value try_parse_number(const char* str, uint64_t* i);
 JsonP_Value try_parse_array(const char* str, uint64_t* i);
+JsonP_Value try_parse_object(const char* str, uint64_t* i);
 
 void print_array(JsonP_Value arr, uint64_t level);
+void print_object(JsonP_Value arr, uint64_t level);
 
 int main() {
-    const char* input = "[123, false, null, 69, \"testing\", 420, [1, 2, 3]]";
+    // const char* input = "[123, false, null, 69, \"testing\", 420, [1, 2,
+    // 3]]";
+    const char* input = "{\"id\": 0, \"url\": \"https://google.com\", "
+                        "\"username\": \"stinta\", \"scores\": [1, 2, 3]}";
     uint64_t i        = 0;
-    JsonP_Value boo   = try_parse_array(input, &i);
-    printf("len: %zu\n", boo.as_array.len);
-    print_array(boo, 1);
+    JsonP_Value obj   = try_parse_object(input, &i);
+    print_object(obj, 1);
 }
 
 #define CHECK_ERR(jsonp_value, check, err)                                     \
@@ -241,12 +276,54 @@ JsonP_Value try_parse_array(const char* str, uint64_t* i) {
         PARSE_VAL(str[*i] == 'f' || str[*i] == 't', bool);
         PARSE_VAL(str[*i] == 'n', null);
         PARSE_VAL(str[*i] == '"', string);
+        PARSE_VAL(str[*i] == '{', object);
         (*i)++;
     }
     value.as_array.array = arr.xs;
     value.as_array.len   = arr.len;
     return value;
 }
+#undef PARSE_VAL
+
+#define PARSE_VAL(condition_to_parse, type)                                    \
+    if (condition_to_parse) {                                                  \
+        JsonP_Value parsed = try_parse_##type(str, i);                         \
+        QUICK_RET();                                                           \
+        JsonP_ObjectValues_push(&values, name.as_string.str, parsed);          \
+        (*i)++;                                                                \
+        skip_whitespace(str, i);                                               \
+        continue;                                                              \
+    }
+JsonP_Value try_parse_object(const char* str, uint64_t* i) {
+    JsonP_Value value = {0};
+    value.type        = JPT_OBJECT;
+    value.error       = JPPE_NONE;
+    CHECK_ERR(value, *i >= strlen(str), JPPE_INPUT_END);
+    CHECK_ERR(value, str[*i] != '{', JPPE_ARRAY_INVALID_BEGIN);
+    (*i)++;
+
+    JsonP_ObjectValues values = JsonP_ObjectValues_new();
+
+    const uint64_t begin = *i;
+    while (*i < strlen(str) && str[*i] != '}') {
+        skip_whitespace(str, i);
+        CHECK_ERR(value, *i > strlen(str), JPPE_NO_CORRECT);
+        JsonP_Value name = try_parse_string(str, i);
+        skip_whitespace(str, i);
+        CHECK_ERR(value, str[*i] != ':', JPPE_NO_CORRECT);
+        (*i)++;
+        skip_whitespace(str, i);
+        PARSE_VAL(isdigit(str[*i]), number);
+        PARSE_VAL(str[*i] == '[', array);
+        PARSE_VAL(str[*i] == 'f' || str[*i] == 't', bool);
+        PARSE_VAL(str[*i] == 'n', null);
+        PARSE_VAL(str[*i] == '"', string);
+        PARSE_VAL(str[*i] == '{', object);
+    }
+    value.as_object.values = values;
+    return value;
+}
+#undef PARSE_VAL
 #undef QUICK_RET
 
 void print_array(JsonP_Value arr, uint64_t level) {
@@ -282,6 +359,9 @@ void print_array(JsonP_Value arr, uint64_t level) {
         case JPT_ARRAY: {
             print_array(arr.as_array.array[i], level + 1);
         }
+        case JPT_OBJECT: {
+            print_object(arr.as_array.array[i], level + 1);
+        }
         }
         printf(",\n");
     }
@@ -290,4 +370,51 @@ void print_array(JsonP_Value arr, uint64_t level) {
         printf("    ");
     }
     printf("]");
+}
+
+void print_object(JsonP_Value arr, uint64_t level) {
+    for (int j = 0; j < level - 1; j++) {
+        printf("    ");
+    }
+    printf("{\n");
+    for (int i = 0; i < arr.as_object.values.len; i++) {
+        for (int j = 0; j < level; j++) {
+            printf("    ");
+        }
+        printf("%s : ", arr.as_object.values.values[i].key);
+        switch (arr.as_object.values.values[i].value->type) {
+        case JPT_NULL: {
+            printf("null");
+            break;
+        }
+        case JPT_BOOL: {
+            if (arr.as_object.values.values[i].value->as_bool.val) {
+                printf("true");
+            } else {
+                printf("false");
+            }
+            break;
+        }
+        case JPT_NUMBER: {
+            printf("%f", arr.as_object.values.values[i].value->as_number.value);
+            break;
+        }
+        case JPT_STRING: {
+            printf("%s", arr.as_object.values.values[i].value->as_string.str);
+            break;
+        }
+        case JPT_ARRAY: {
+            print_array(*arr.as_object.values.values[i].value, level + 1);
+        }
+        case JPT_OBJECT: {
+            print_object(*arr.as_object.values.values[i].value, level + 1);
+        }
+        }
+        printf(",\n");
+    }
+
+    for (int j = 0; j < level; j++) {
+        printf("    ");
+    }
+    printf("}");
 }
