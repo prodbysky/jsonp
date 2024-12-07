@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
 typedef enum {
     JPT_NULL = 0,
     JPT_OBJECT,
@@ -86,6 +87,8 @@ typedef union JsonP_Value {
     } as_bool;
 } JsonP_Value;
 
+#define JsonP_QueryObject(value, key)                                          \
+    JsonP_ObjectValues_get(&value.as_object.values, key);
 JsonP_Array JsonP_Array_new();
 void JsonP_Array_push(JsonP_Array* arr, JsonP_Value val);
 
@@ -109,6 +112,11 @@ JsonP_Value try_parse_object(const char* str, uint64_t* i);
         return value;                                                          \
     }
 
+#define TRY(cond, body)                                                        \
+    if (cond) {                                                                \
+        body;                                                                  \
+        continue;                                                              \
+    }
 JsonP_Value try_parse_bool(const char* str, uint64_t* i) {
     JsonP_Value value   = {0};
     value.type          = JPT_BOOL;
@@ -159,7 +167,7 @@ JsonP_Value try_parse_string(const char* str, uint64_t* i) {
     }
     const uint64_t len = (*i) - begin;
     (*i)++;
-    value.as_string.str      = malloc(sizeof(char) * (len + 1));
+    value.as_string.str      = (char*) malloc(sizeof(char) * (len + 1));
     value.as_string.str[len] = 0;
     memcpy(value.as_string.str, &str[begin], len);
 
@@ -181,7 +189,7 @@ JsonP_Value try_parse_number(const char* str, uint64_t* i) {
         (*i)++;
     }
     const uint64_t len = (*i) - begin;
-    char* s            = malloc(sizeof(char) * (len + 1));
+    char* s            = (char*) malloc(sizeof(char) * (len + 1));
     s[len]             = 0;
     memcpy(s, &str[begin], len);
     value.as_number.value = atof(s);
@@ -195,10 +203,17 @@ void skip_whitespace(const char* str, uint64_t* i) {
     }
 }
 
-#define QUICK_RET()                                                            \
-    if (parsed.error != 0) {                                                   \
-        value.error = JPPE_NO_CORRECT;                                         \
+#define QUICK_RET(err)                                                         \
+    if (err != 0) {                                                            \
+        err = JPPE_NO_CORRECT;                                                 \
         return value;                                                          \
+    }
+
+#define TRY_PARSE(cond, type)                                                  \
+    if (cond) {                                                                \
+        JsonP_Value parsed = try_parse_##type(str, i);                         \
+        QUICK_RET(parsed.error);                                               \
+        JsonP_Array_push(&arr, parsed);                                        \
     }
 
 JsonP_Value try_parse_array(const char* str, uint64_t* i) {
@@ -218,27 +233,27 @@ JsonP_Value try_parse_array(const char* str, uint64_t* i) {
 
         if (isdigit(str[*i])) {
             JsonP_Value parsed = try_parse_number(str, i);
-            QUICK_RET();
+            QUICK_RET(parsed.error);
             JsonP_Array_push(&arr, parsed);
         } else if (str[*i] == '"') {
             JsonP_Value parsed = try_parse_string(str, i);
-            QUICK_RET();
+            QUICK_RET(parsed.error);
             JsonP_Array_push(&arr, parsed);
         } else if (str[*i] == '{') {
             JsonP_Value parsed = try_parse_object(str, i);
-            QUICK_RET();
+            QUICK_RET(parsed.error);
             JsonP_Array_push(&arr, parsed);
         } else if (str[*i] == '[') {
             JsonP_Value parsed = try_parse_array(str, i);
-            QUICK_RET();
+            QUICK_RET(parsed.error);
             JsonP_Array_push(&arr, parsed);
         } else if (str[*i] == 't' || str[*i] == 'f') {
             JsonP_Value parsed = try_parse_bool(str, i);
-            QUICK_RET();
+            QUICK_RET(parsed.error);
             JsonP_Array_push(&arr, parsed);
         } else if (str[*i] == 'n') {
             JsonP_Value parsed = try_parse_null(str, i);
-            QUICK_RET();
+            QUICK_RET(parsed.error);
             JsonP_Array_push(&arr, parsed);
         } else {
             value.error = JPPE_NO_CORRECT;
@@ -247,7 +262,7 @@ JsonP_Value try_parse_array(const char* str, uint64_t* i) {
 
         skip_whitespace(str, i);
         if (str[*i] == ',')
-            (*i)++; // Skip comma if present
+            (*i)++;
         skip_whitespace(str, i);
     }
 
@@ -258,20 +273,6 @@ JsonP_Value try_parse_array(const char* str, uint64_t* i) {
     value.as_array.len   = arr.len;
     return value;
 }
-
-#undef PARSE_VAL
-
-#define PARSE_VAL(condition_to_parse, type)                                    \
-    if (condition_to_parse) {                                                  \
-        JsonP_Value parsed = try_parse_##type(str, i);                         \
-        QUICK_RET();                                                           \
-        JsonP_ObjectValues_push(&values, key.as_string.str, parsed);           \
-        skip_whitespace(str, i);                                               \
-        if (str[*i] == ',')                                                    \
-            (*i)++;                                                            \
-        skip_whitespace(str, i);                                               \
-        continue;                                                              \
-    }
 
 JsonP_Value try_parse_object(const char* str, uint64_t* i) {
     JsonP_Value value = {0};
@@ -298,27 +299,27 @@ JsonP_Value try_parse_object(const char* str, uint64_t* i) {
 
         if (isdigit(str[*i])) {
             JsonP_Value parsed = try_parse_number(str, i);
-            QUICK_RET();
+            QUICK_RET(parsed.error);
             JsonP_ObjectValues_push(&values, key.as_string.str, parsed);
         } else if (str[*i] == '"') {
             JsonP_Value parsed = try_parse_string(str, i);
-            QUICK_RET();
+            QUICK_RET(parsed.error);
             JsonP_ObjectValues_push(&values, key.as_string.str, parsed);
         } else if (str[*i] == '{') {
             JsonP_Value parsed = try_parse_object(str, i);
-            QUICK_RET();
+            QUICK_RET(parsed.error);
             JsonP_ObjectValues_push(&values, key.as_string.str, parsed);
         } else if (str[*i] == '[') {
             JsonP_Value parsed = try_parse_array(str, i);
-            QUICK_RET();
+            QUICK_RET(parsed.error);
             JsonP_ObjectValues_push(&values, key.as_string.str, parsed);
         } else if (str[*i] == 't' || str[*i] == 'f') {
             JsonP_Value parsed = try_parse_bool(str, i);
-            QUICK_RET();
+            QUICK_RET(parsed.error);
             JsonP_ObjectValues_push(&values, key.as_string.str, parsed);
         } else if (str[*i] == 'n') {
             JsonP_Value parsed = try_parse_null(str, i);
-            QUICK_RET();
+            QUICK_RET(parsed.error);
             JsonP_ObjectValues_push(&values, key.as_string.str, parsed);
         } else {
             value.error = JPPE_NO_CORRECT;
@@ -340,7 +341,7 @@ JsonP_Value try_parse_object(const char* str, uint64_t* i) {
 JsonP_Array JsonP_Array_new() {
     JsonP_Array arr = {0};
     arr.cap         = 8;
-    arr.xs          = malloc(sizeof(JsonP_Value) * 8);
+    arr.xs          = (JsonP_Value*) malloc(sizeof(JsonP_Value) * 8);
     arr.len         = 0;
     memset(arr.xs, 0, sizeof(JsonP_Value) * 8);
     return arr;
@@ -348,7 +349,8 @@ JsonP_Array JsonP_Array_new() {
 void JsonP_Array_push(JsonP_Array* arr, JsonP_Value val) {
     if (arr->len >= arr->cap) {
         arr->cap *= 1.5;
-        arr->xs   = realloc(arr->xs, sizeof(JsonP_Value) * arr->cap);
+        arr->xs =
+            (JsonP_Value*) realloc(arr->xs, sizeof(JsonP_Value) * arr->cap);
     }
     arr->xs[arr->len++] = val;
 }
@@ -356,7 +358,7 @@ JsonP_ObjectValues JsonP_ObjectValues_new() {
     JsonP_ObjectValues o_vals = {0};
     o_vals.cap                = 8;
     o_vals.len                = 0;
-    o_vals.values             = malloc(sizeof(JsonP_ObjectEntry) * 8);
+    o_vals.values = (JsonP_ObjectEntry*) malloc(sizeof(JsonP_ObjectEntry) * 8);
     memset(o_vals.values, 0, sizeof(JsonP_ObjectEntry) * 8);
     return o_vals;
 }
@@ -364,12 +366,14 @@ void JsonP_ObjectValues_push(JsonP_ObjectValues* vals, const char* name,
                              JsonP_Value value) {
     if (vals->len >= vals->cap) {
         vals->cap    *= 1.5;
-        vals->values  = realloc(vals->values, sizeof(JsonP_Value) * vals->cap);
+        vals->values  = (JsonP_ObjectEntry*) realloc(
+            vals->values, sizeof(JsonP_Value) * vals->cap);
     }
-    vals->values[vals->len].key = malloc(sizeof(char) * (strlen(name) + 1));
+    vals->values[vals->len].key =
+        (char*) malloc(sizeof(char) * (strlen(name) + 1));
     memcpy(vals->values[vals->len].key, name, strlen(name));
     vals->values[vals->len].key[strlen(name)] = 0;
-    vals->values[vals->len].value             = malloc(sizeof(JsonP_Value));
+    vals->values[vals->len].value = (JsonP_Value*) malloc(sizeof(JsonP_Value));
     memcpy(vals->values[vals->len].value, &value, sizeof(JsonP_Value));
     vals->len++;
 }
@@ -383,7 +387,6 @@ JsonP_Value JsonP_ObjectValues_get(const JsonP_ObjectValues* vals,
     return (JsonP_Value) {.type = JPT_NULL, .error = JPPE_NONE};
 }
 
-#undef PARSE_VAL
 #undef QUICK_RET
 
 #endif

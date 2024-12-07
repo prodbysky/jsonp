@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -8,13 +9,13 @@ void print_array(JsonP_Value arr, uint64_t level);
 void print_object(JsonP_Value arr, uint64_t level);
 
 int main() {
-    // const char* input = "[123, false, null, 69, \"testing\", 420, [1, 2,
-    // 3]]";
-    const char* input = "{\"id\": 0, \"url\": \"https://google.com\", "
+    const char* input = "{\"id\": 2, \"url\": \"https://google.com\", "
                         "\"username\": \"stinta\", \"scores\": [1, 2, 3]}";
     uint64_t i        = 0;
     JsonP_Value obj   = try_parse_object(input, &i);
-    print_object(obj, 1);
+    JsonP_Value id    = JsonP_QueryObject(obj, "id");
+    assert(id.type == JPT_NUMBER);
+    printf("%f\n", id.as_number.value);
 }
 
 void print_array(JsonP_Value arr, uint64_t level) {
